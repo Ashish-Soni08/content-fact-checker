@@ -13,7 +13,7 @@ const _sourceSerif_4 = V0_Font_Source_Serif_4({ subsets: ['latin'], weight: ["20
 
 export const metadata: Metadata = {
   title: 'Content Fact Checker | AI-Powered Verification',
-  description: 'Verify factual claims in any text or URL using Cerebras AI and Parallel Search. Extract claims and check them against authoritative sources.',
+  description: 'Verify factual claims in any text or URL using Claude and Firecrawl. Extract claims and check them against authoritative sources.',
   generator: 'v0.app',
   icons: {
     icon: [

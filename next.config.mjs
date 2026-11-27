@@ -6,6 +6,8 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  // flagsmith-nodejs pulls in pino/thread-stream, which must not be bundled.
+  serverExternalPackages: ["flagsmith-nodejs", "pino", "thread-stream"],
  
 }
 

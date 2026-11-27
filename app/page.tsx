@@ -6,7 +6,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ApiKeysPanel } from "@/components/api-keys-panel"
 import { ClaimResultCard } from "@/components/claim-result-card"
 import { FactCheckLoading } from "@/components/fact-check-loading"
 import { ResultsSummary } from "@/components/results-summary"
@@ -17,6 +16,19 @@ import { useSearchParams } from "next/navigation"
 import { Suspense } from "react"
 import Loading from "./loading"
 
+interface RunMeta {
+  flags: {
+    judge_prompt_version: string
+    llm_model: string
+    web_search_evidence: boolean
+    reasoning_effort: string
+    max_claims: number
+  }
+  flagsSource: string
+  latencyMs: number
+  tokens: number
+}
+
 interface ClaimResult {
   claim: string
   verdict: "true" | "false" | "uncertain"
@@ -25,8 +37,8 @@ interface ClaimResult {
 }
 
 export default function FactCheckerPage() {
-  const [cerebrasKey, setCerebrasKey] = useState("")
-  const [parallelKey, setParallelKey] = useState("")
+  const [identity, setIdentity] = useState("")
+  const [meta, setMeta] = useState<RunMeta | null>(null)
   const [inputText, setInputText] = useState("")
   const [inputUrl, setInputUrl] = useState("")
   const [inputMode, setInputMode] = useState<"text" | "url">("text")
@@ -38,20 +50,23 @@ export default function FactCheckerPage() {
   const [error, setError] = useState<string | null>(null)
   const searchParams = useSearchParams()
 
-  // Load API keys from localStorage on mount
+  // A stable anonymous id per browser, used as the Flagsmith identity.
   useEffect(() => {
-    const storedCerebras = localStorage.getItem("cerebras_api_key")
-    const storedParallel = localStorage.getItem("parallel_api_key")
-    if (storedCerebras) setCerebrasKey(storedCerebras)
-    if (storedParallel) setParallelKey(storedParallel)
+    let id: string | null = null
+    try {
+      id = localStorage.getItem("flagops_identity")
+      if (!id) {
+        id = `web-${crypto.randomUUID()}`
+        localStorage.setItem("flagops_identity", id)
+      }
+    } catch {
+      id = `web-${crypto.randomUUID()}`
+    }
+    setIdentity(id)
   }, [])
 
   const handleFactCheck = async () => {
-    if (!cerebrasKey || !parallelKey) {
-      setError("Please configure your API keys first.")
-      return
-    }
-
+    setMeta(null)
     let textToCheck = inputText
 
     // If URL mode, first extract text from URL
@@ -103,16 +118,15 @@ export default function FactCheckerPage() {
     try {
       const response = await fetch("/api/fact-check", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: textToCheck,
-          cerebrasApiKey: cerebrasKey,
-          parallelApiKey: parallelKey,
-          maxClaims: 6,
-        }),
+        headers: {
+          "Content-Type": "application/json",
+          ...(identity ? { "x-flagops-identity": identity } : {}),
+        },
+        body: JSON.stringify({ text: textToCheck }),
       })
 
       const data = await response.json()
+      if (data.meta) setMeta(data.meta)
 
       if (!response.ok) {
         throw new Error(data.error || "Failed to fact-check content")
@@ -138,7 +152,7 @@ export default function FactCheckerPage() {
     }
   }
 
-  const keysConfigured = cerebrasKey && parallelKey
+  const keysConfigured = true
 
   return (
     <div className="min-h-screen bg-background">
@@ -159,20 +173,25 @@ export default function FactCheckerPage() {
             Content Fact Checker
           </h1>
           <p className="text-muted-foreground max-w-2xl mx-auto text-balance">
-            Powered by Cerebras AI and Parallel Search. Extract factual claims from any text or URL
+            Powered by Claude and Firecrawl, steered by Flagsmith feature flags. Extract factual claims from any text or URL
             and verify them against authoritative sources.
           </p>
         </header>
 
-        {/* API Keys Panel */}
-        <div className="flex justify-end mb-6">
-          <ApiKeysPanel
-            cerebrasKey={cerebrasKey}
-            parallelKey={parallelKey}
-            onCerebrasKeyChange={setCerebrasKey}
-            onParallelKeyChange={setParallelKey}
-          />
-        </div>
+        {/* Active flag variants for the last run (handy on camera) */}
+        {meta && (
+          <div className="flex flex-wrap justify-end gap-2 mb-6 text-xs font-mono text-muted-foreground">
+            <span className="px-2 py-1 rounded bg-muted">judge {meta.flags.judge_prompt_version}</span>
+            <span className="px-2 py-1 rounded bg-muted">{meta.flags.llm_model}</span>
+            <span className="px-2 py-1 rounded bg-muted">effort {meta.flags.reasoning_effort}</span>
+            <span className="px-2 py-1 rounded bg-muted">search {meta.flags.web_search_evidence ? "on" : "off"}</span>
+            <span className="px-2 py-1 rounded bg-muted">{meta.latencyMs} ms</span>
+            <span className="px-2 py-1 rounded bg-muted">{meta.tokens} tokens</span>
+            {meta.flagsSource !== "flagsmith" && (
+              <span className="px-2 py-1 rounded bg-amber-500/15 text-amber-600">flag defaults</span>
+            )}
+          </div>
+        )}
 
         {/* Main Input Card */}
         <Card className="bg-card/50 backdrop-blur-sm border-border/50 mb-8 animate-in fade-in-0 slide-in-from-bottom-4 duration-500">
@@ -256,11 +275,6 @@ Example: The Eiffel Tower was built in 1889 and stands at 330 meters tall. It wa
               )}
             </Button>
 
-            {!keysConfigured && (
-              <p className="text-xs text-center text-muted-foreground">
-                Configure your API keys to enable fact-checking
-              </p>
-            )}
           </CardContent>
         </Card>
 
@@ -321,9 +335,9 @@ Example: The Eiffel Tower was built in 1889 and stands at 330 meters tall. It wa
           <div className="flex flex-col items-center gap-4">
             <p className="text-xs text-muted-foreground">Built with</p>
             <div className="flex items-center gap-6">
-              {/* Cerebras */}
+              {/* Claude */}
               <a
-                href="https://cerebras.ai"
+                href="https://www.anthropic.com/claude"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors group"
@@ -335,14 +349,14 @@ Example: The Eiffel Tower was built in 1889 and stands at 330 meters tall. It wa
                 >
                   <path d="M12 2L2 7v10l10 5 10-5V7L12 2zm0 2.18l6.9 3.45L12 11.08 5.1 7.63 12 4.18zM4 8.82l7 3.5v7.36l-7-3.5V8.82zm9 10.86v-7.36l7-3.5v7.36l-7 3.5z" />
                 </svg>
-                <span className="text-sm font-medium">Cerebras</span>
+                <span className="text-sm font-medium">Claude</span>
               </a>
 
               <span className="text-muted-foreground/30">×</span>
 
-              {/* Parallel */}
+              {/* Firecrawl */}
               <a
-                href="https://parallel.ai"
+                href="https://www.firecrawl.dev"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors group"
@@ -354,14 +368,14 @@ Example: The Eiffel Tower was built in 1889 and stands at 330 meters tall. It wa
                 >
                   <path d="M4 4h4v16H4V4zm6 0h4v16h-4V4zm6 0h4v16h-4V4z" />
                 </svg>
-                <span className="text-sm font-medium">Parallel</span>
+                <span className="text-sm font-medium">Firecrawl</span>
               </a>
 
               <span className="text-muted-foreground/30">×</span>
 
-              {/* v0 */}
+              {/* Flagsmith */}
               <a
-                href="https://v0.dev"
+                href="https://www.flagsmith.com"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors group"
@@ -373,7 +387,7 @@ Example: The Eiffel Tower was built in 1889 and stands at 330 meters tall. It wa
                 >
                   <path d="M12 2L2 19h20L12 2zm0 4l6.5 11h-13L12 6z" />
                 </svg>
-                <span className="text-sm font-medium">v0</span>
+                <span className="text-sm font-medium">Flagsmith</span>
               </a>
             </div>
             <p className="text-xs text-muted-foreground/70 mt-2">
